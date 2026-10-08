@@ -6,7 +6,7 @@ from urllib.parse import quote
 import pandas as pd
 import streamlit as st
 
-st.title("🚗 部活 車割自動作成アプリ")
+st.title("車割自動作成")
 
 # ==========================================
 # 1. Googleスプレッドシート連携設定
