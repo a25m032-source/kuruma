@@ -1,6 +1,6 @@
 import streamlit as st
-from streamlit_gsheets import GSheetsConnection
 import pandas as pd
+import gspread
 import random
 import itertools
 
@@ -10,32 +10,36 @@ st.title("🚗 部活 車割自動作成アプリ")
 # 1. Googleスプレッドシート連携設定
 # ==========================================
 # ★ご自身のスプレッドシートURLをここに貼り付けてください
-SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/YOUR_SPREADSHEET_ID_HERE/edit"
-
-conn = st.connection("gsheets", type=GSheetsConnection)
+SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/172337ady7Lr3pCf5t1Y7iFddDP0G23Yr5_pNmPddkgo/edit?usp=sharing"
 
 @st.cache_data(ttl=10) # キャッシュ10秒
 def load_data():
+    gc = gspread.public_authorize(SPREADSHEET_URL)
+    sh = gc.open_by_url(SPREADSHEET_URL)
+    
     # membersシートの読み込み
-    df_members = conn.read(spreadsheet=SPREADSHEET_URL, worksheet="members")
+    ws_members = sh.worksheet("members")
+    df_members = pd.DataFrame(ws_members.get_all_records())
+    
     members_list = []
     for _, row in df_members.iterrows():
         members_list.append({
             "name": str(row["名前"]).strip(),
             "grade": int(row["学年"]),
-            "is_driver": bool(row["ドライバー"]),
+            "is_driver": bool(row["ドライバー"]) if isinstance(row["ドライバー"], bool) else (str(row["ドライバー"]).upper() == "TRUE"),
             "capacity": int(row["定員"]),
             "suffix": str(row["敬称"]).strip() if pd.notna(row["敬称"]) and str(row["敬称"]).strip() != "nan" else ""
         })
 
-    # historyシート（自動集計された合計データ）の読み込み
+    # historyシートの読み込み
     past_pairs = {}
     try:
-        df_history = conn.read(spreadsheet=SPREADSHEET_URL, worksheet="history")
+        ws_history = sh.worksheet("history")
+        df_history = pd.DataFrame(ws_history.get_all_records())
         for _, row in df_history.iterrows():
             m1 = str(row["名前1"]).strip()
             m2 = str(row["名前2"]).strip()
-            count = int(row["回数"])
+            count = int(row["回数"]) if str(row["回数"]).isdigit() else 0
             pair = tuple(sorted([m1, m2]))
             past_pairs[pair] = count
     except Exception:
@@ -46,8 +50,8 @@ def load_data():
 try:
     ALL_MEMBERS, PAST_PAIRS = load_data()
     member_dict = {m["name"]: m for m in ALL_MEMBERS}
-except Exception:
-    st.error("スプレッドシートの読み込みに失敗しました。URLやシート名を確認してください。")
+except Exception as e:
+    st.error("スプレッドシートの読み込みに失敗しました。URLやシート名、公開設定（閲覧者：リンクを知っている全員）を確認してください。")
     st.stop()
 
 if st.button("🔄 スプレッドシートの最新データを再読み込み"):
@@ -145,24 +149,7 @@ if st.session_state.cars:
     st.text_area("以下のテキストをコピーしてLINEに貼り付けてください", value=final_text, height=200)
 
     # 過去履歴追加用テキストの自動生成
-    st.subheader("4. 過去履歴への追加（スプレッドシート貼り付け用）")
-    history_rows = []
-    for driver, passengers in updated_cars.items():
-        all_members = [driver] + passengers
-        for m1, m2 in itertools.combinations(all_members, 2):
-            m1_s, m2_s = sorted([m1, m2])
-            history_rows.append(f"{m1_s}\t{m2_s}\t1")
-    
-    paste_text = "\n".join(history_rows)
-    st.caption("車割が確定したら、下のテキストをコピーしてスプレッドシートの 'history_log' シートの末尾に貼り付けてください。")
-    st.text_area("履歴追加用テキスト", value=paste_text, height=150)
-# ==========================================
-# 4. 履歴データの最新表示（次回用の準備）
-# ==========================================
-if st.session_state.cars:
-    st.subheader("4. 過去履歴の自動加算")
-    
-    # 今回発生したペアを+1して、既存のPAST_PAIRSと合算
+    st.subheader("4. 過去履歴への自動加算")
     updated_pairs = PAST_PAIRS.copy()
     for driver, passengers in updated_cars.items():
         all_members = [driver] + passengers
@@ -170,11 +157,13 @@ if st.session_state.cars:
             pair = tuple(sorted([m1, m2]))
             updated_pairs[pair] = updated_pairs.get(pair, 0) + 1
 
-    # スプレッドシート（historyシート）用のテキストを作成
     tsv_lines = ["名前1\t名前2\t回数"]
     for (m1, m2), count in sorted(updated_pairs.items()):
         tsv_lines.append(f"{m1}\t{m2}\t{count}")
     
+    latest_history_text = "\n".join(tsv_lines)
+    st.caption("今回の車割りを反映した最新の履歴一覧です。必要に応じてスプレッドシートの 'history' シート全体に上書き貼り付けしてください。")
+    st.text_area("最新の history シート用データ（全選択して上書き用）", value=latest_history_text, height=150)
     latest_history_text = "\n".join(tsv_lines)
     
     st.caption("今回の車割りを反映した最新の履歴一覧です。必要に応じてスプレッドシートの 'history' シート全体に上書き貼り付けしてください。")
